@@ -3,6 +3,7 @@
 /work_dirs/
 /data/
 /logs/
+/third_party/
 
 # Model and recovery artifacts
 *.pth

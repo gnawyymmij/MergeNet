@@ -79,6 +79,10 @@ bash scripts/train_imagenet_300e.sh
 变量设置 `BATCH_SIZE`、`GLOBAL_BATCH`、`RUN_NAME` 和 `RESUME`。完整配置位于
 [`configs/mergenet_l2_spatial_r3.yaml`](configs/mergenet_l2_spatial_r3.yaml)。
 
+论文仍需补充的 DTEM、统一效率评测、组件消融和路由可视化实验见
+[`EXPERIMENTS.md`](EXPERIMENTS.md)。如只想检查启动参数而不开始训练，可在上述
+命令前增加 `DRY_RUN=1`。
+
 本仓库不提供预训练 checkpoint；checkpoint 会在训练过程中由 trainer 正常生成。
 
 ## License

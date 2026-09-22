@@ -87,6 +87,11 @@ at 1,024. `BATCH_SIZE`, `GLOBAL_BATCH`, `RUN_NAME`, and `RESUME` may be supplied
 as environment variables. The full scientific configuration is in
 [`configs/mergenet_l2_spatial_r3.yaml`](configs/mergenet_l2_spatial_r3.yaml).
 
+The remaining paper experiments (matched DTEM, common accuracy/latency/memory,
+component interventions, and routing traces) are specified in
+[`EXPERIMENTS.md`](EXPERIMENTS.md). To validate launcher arguments without
+starting training, add `DRY_RUN=1` to the command above.
+
 For direct control, invoke the trainer with `torchrun`:
 
 ```bash

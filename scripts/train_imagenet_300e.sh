@@ -62,4 +62,8 @@ fi
 printf 'Launching:'
 printf ' %q' "${CMD[@]}"
 printf '\n'
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  echo "DRY_RUN=1: command validated; training was not started."
+  exit 0
+fi
 exec "${CMD[@]}"
