@@ -89,7 +89,8 @@ as environment variables. The full scientific configuration is in
 
 The remaining paper experiments (matched DTEM, common accuracy/latency/memory,
 component interventions, and routing traces) are specified in
-[`EXPERIMENTS.md`](EXPERIMENTS.md). To validate launcher arguments without
+[`EXPERIMENTS.md`](EXPERIMENTS.md). The privacy-aware result return schema is in
+[`DATA_HANDOFF.md`](DATA_HANDOFF.md). To validate launcher arguments without
 starting training, add `DRY_RUN=1` to the command above.
 
 For direct control, invoke the trainer with `torchrun`:

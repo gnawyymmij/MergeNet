@@ -1,6 +1,7 @@
 # MergeNet 论文补充实验执行手册（E1 / E2 / E3 / E6）
 
 本文档是交给实验执行者及其 AI 助手的完整执行合同。请先通读全文，再修改代码或启动任务。实验目标是补齐论文当前保留的四项证据：matched DTEM、统一 accuracy/latency/memory benchmark、两个组件的推理消融，以及被动 routing trace。
+**回传数据格式与隐私边界另见 `DATA_HANDOFF.md`；正式执行前也必须通读。**请尽量交付其中的 L1 匿名逐图数值，使作者能在本地复算表格、配对区间和路由图，而不传出 checkpoint 或原始数据；无法外传时须在状态文件明示限制。
 
 正式运行必须遵守以下原则：
 
@@ -583,6 +584,20 @@ E6 用已有最终 MergeNet checkpoint 展示模型实际把哪些 patch 信息�
 
 E6 不训练，不改变模型输出。Trace hooks 必须与 E2 timing 完全分离。
 
+### 8.1a 论文图的预注册设计与可分享边界
+
+本轮 E6 的目标成图是**一张正文定性图 + 一张附录总体统计图**，不得事后根据哪一层、哪张图“最好看”来改选择规则。
+版式预览见 `docs/visualization_preview.png`；其生成器 `docs/render_visualization_preview.py` 只使用合成数据，不能当作任何实验结果或复用其中的数值。
+
+- 正文图采用两行两列：上行为固定正确案例，下行为固定错误案例；左列画**第 3 个 local routing step** 的实际 donor→receiver 边，右列画最终 **392/784 个 carrier 的原始 28×28 位置**。每个案例的左、右列使用同一张输入图、同一 checkpoint、同一次 eval 协议。图下注明这只是 routing 行为，非语义分割或因果证据。
+- 正确/错误案例均从下述 1,000 张预先冻结的 manifest 中选；各取其组内 `digest` 字典序最小的一张。若没有错误案例，不编造，改为前两张正确例并在图注解释。预测正确性取 E2 native MergeNet 同一 checkpoint/预处理下的 top-1 与 ground truth 比较，不能为作图另换 checkpoint 或 crop。
+- 左列原图背景必须是**实际送入模型的 224×224 center crop**（反归一化仅用于显示），不是未裁剪原图。四个 14×14 象限中，各取最终应用于 transport 的 `assign_postmask_ij > 0` 且最高的 8 条边；它是 soft gate/row-softmax 经 donor 归一化及最终 physical mask 后的实际权重，**不能直接用未归一化的 `g_i q_ij` 代替**。同一 donor/receiver 重复边保留其 step-3 实际记录，按 `(weight desc, donor index asc, receiver index asc)` 排序破同分，最多 32 条。箭头从 donor 原始 patch 中心指向 receiver 原始 patch 中心；线宽/透明度按全图统一固定范围编码实际 transport weight，并附标尺。不得将 cosine similarity、eligible mask 或 source center 的连线冒充实际 transport 边。
+- 右列在 28×28 原始格点上标记最终 top-K **selected slot index**，非 center-of-mass；dot 大小按最终 carrier mass 编码。正确/错误两行使用同一 mass 尺度与颜色图例；未选中的位置用低对比灰点，避免把空白误认为图像边界。注明 `K=392, CLS excluded`，核对 unique count=392。右列可叠加与左列相同的裁剪图作浅背景；若数据/图片授权不允许对外传原图，就只导出网格版，绝不从无图底板猜测语义边界。
+- 图中文字最小 8 pt，最终文件同时给矢量 PDF（照片嵌入可以是 raster）与 300-dpi PNG；用色盲友好的深蓝/橙/灰配色，灰度打印仍以线型/大小区分。任何尚无真实数据的预览必须显著标注 `SYNTHETIC MOCKUP / NOT AN EXPERIMENTAL RESULT`，不得放入投稿稿。
+- 附录总体图只用全部 1,000 张预选图片：左为六步每图 routing-distance p50/p90 的分布（单位：patch），右为 28×28 最终 carrier selection frequency 热图（分母始终为 1,000）；可在图注另报每图 coverage mean/p95 与 top-10% mass share 的均值和分位数。正确/错误分组只作描述性附表，不以图中差异推断因果或语义保留。
+
+学长/CC 机器是原始数据、checkpoint、原始 ImageNet 图片与完整内部 trace 的权威存放地。**建议回传 `DATA_HANDOFF.md` 定义的 L1 包**：成图/总表之外还有匿名逐图评测、1,000 图分层指标/最终 carrier，以及固定案例的实际路由边，使作者可在本地复算和重画。**不需要传出 checkpoint、原始逐图 logits、1000 份原始 NPZ 或含内部绝对路径的 manifest。** 图片背景是否能传出须先按公司与数据集政策确认；不获批准时使用 grid-only 版本。论文图中的任何数值必须由真实结果包产生，不能从预览图抄写。
+
 ### 8.2 样本集固定规则
 
 主统计集固定为 1,000 张 ImageNet validation images，每个 ground-truth class 一张。为避免挑图：
@@ -592,7 +607,7 @@ E6 不训练，不改变模型输出。Trace hooks 必须与 E2 timing 完全分
 3. 保存完整 `sample_manifest.csv`，包含 class、relative path、digest；
 4. 在看模型预测和 trace 之前冻结该 manifest。
 
-聚合统计必须使用全部 1,000 张。定性图建议展示 12 张：前 8 张取全体 manifest digest 最小者；另外 2 个正确案例和 2 个错误案例分别按 digest 最小规则选择。不得只展示人工挑选的漂亮结果。
+聚合统计必须使用全部 1,000 张。正文图固定展示上述一个正确和一个错误案例。另可导出 12 张审查联系表：前 8 张取全体 manifest digest 最小者；另外 2 个正确案例和 2 个错误案例分别按 digest 最小规则选择。正文案例不得从这 12 张中人工改选“最好看”的样本。若图像不能离开 CC，则联系表仅供 CC 本地审阅，外传 grid-only 图。
 
 ### 8.3 Trace-off/on 等价性 gate
 
@@ -629,6 +644,8 @@ E6 不训练，不改变模型输出。Trace hooks 必须与 E2 timing 完全分
 - carrier center/center-of-mass；
 - local 和 latent token counts。
 
+为成图，必须在**实际 sparse transport 调用之前、`assign = assign * physical_mask` 之后**增加只读 trace tap，记录 step-3 的 `(donor_original_index, receiver_original_index, assign_postmask_ij)`，并保留六步同定义的聚合计数。普通 module forward hook 不一定看得到函数内部的边权；不能只依赖 `_tome_info` 中的 eligible mask。每条边的两个 index 都必须经一次小网格手工核验是原始 28×28 patch slot，而不是局部 A/B 排序后的临时下标。原始边权与最终 mass 记录只在 CC 机器本地保存；导出的正文案例边数组如获批准也仅含匿名 `image_id` 和网格坐标。
+
 若当前实现只能提供 flattened center 而没有完整 source membership，必须在 metadata 标成 `center-only`，不能据此绘制完整成员归属图。若新增 full membership trace，必须先通过 trace-off/on gate。
 
 推荐每图存压缩 NPZ，聚合结果存 Parquet/CSV/JSON；不要为 1,000 图保存无必要的全量 attention matrix。
@@ -647,6 +664,8 @@ E6 不训练，不改变模型输出。Trace hooks 必须与 E2 timing 完全分
 - 按模型预测正确/错误分组的描述性统计。该分组只作诊断，不做因果结论。
 
 overlay 至少包含：原图、28×28 grid、carrier 位置（点大小按 mass）、选定 routing edges 或中心迁移。颜色范围在所有图片间固定，caption 写清 layer 和统计定义。
+
+附录的 carrier selection-frequency 热图按每个原始 slot 在 1,000 图中进入最终 top-K 的次数除以 1,000 计算；不使用 carrier center-of-mass 或 mass 加权。routing-distance 分布先在每张图、每一步对 `assign_postmask_ij>0` 的实际边计算 p50/p90，再按 1,000 张图显示分布，不将全部边拼接成一个“典型图片”。图稿必须附 `figure_data.csv`、`figure_config.json`、原始输出 digest 和渲染脚本 commit，以便仅凭可分享的数字重建附录图。
 
 为避免不同实现给出不可比统计，统一使用以下定义：
 
@@ -674,10 +693,19 @@ e6_routing_trace/
   carrier_mass_histogram.csv
   figures/aggregate_*.pdf
   figures/overlay_<image_id>.png
+  figures/paper_routing_main.pdf
+  figures/paper_routing_main.png
+  figures/paper_routing_population.pdf
+  figures/paper_routing_population.png
   README.md
 ```
 
 `README.md` 必须写清样本选择规则、trace 模式、字段定义、聚合公式、checkpoint hash 和限制。
+**正式回传另建 `DATA_HANDOFF.md` 定义的根级 `share_packet/`**，其中包括匿名逐图指标、逐层直方图、最终 carrier 数组及固定案例的真实边数组。内部 `sample_manifest.csv` 的 relative paths、`traces/*.npz`、原图、checkpoint 和内部机器路径默认不外传。图中的匿名 `image_id` 与 E2/E3 共用，按 `DATA_HANDOFF.md` 的私钥 HMAC 规则在 CC 侧生成；密钥和映射不外传。回传包内的 `figures/caption_draft.md` 必须写明模型、数据 split、1,000 图选择规则、step=3、最多 32 条边的确定性取法、carrier/mass 编码、trace 等价性、图像授权状态及“不是语义分割/因果证据”的限制。若图片授权不通过，`paper_routing_main.*` 必须为 grid-only，不得因为缺图片就省去其它统计和收据。
+
+### 8.7 可直接发给 CC 的可视化任务摘要
+
+> 请用公司侧现有最终 MergeNet EMA checkpoint 按 E6 全文做一次**不训练的被动 trace**。先在固定 8 张图上证明 trace 开/关的 logits、top-K 和 mass 等价，再按固定 hash 规则从 ImageNet-val 每类选 1 张，共 1,000 张，输出六步真实 routing 边/距离、最终 392 个 carrier/mass 的聚合统计。正文图只画预先规定的一个正确例与一个错误例：第 3 步每象限权重最高 8 条实际 transport 边 + 最终 carrier 网格；附录图汇总全部 1,000 张。请在公司侧完成原始 trace 和绘图，并按 `DATA_HANDOFF.md` 尽量给我们 L1 匿名逐图数值包，使我们能在本地复算、重画，而不只是收到成图。不要发送 checkpoint、ImageNet 原始图、逐图 logits、原始 NPZ 或内部路径。如果图片背景不可分享，请交 grid-only 图并注明。预览 PNG 只是版式示意，里面没有真实实验数据。
 
 ## 9. 最终自动汇总与论文可用表
 
@@ -698,7 +726,7 @@ e6_routing_trace/
 - E1 300 epochs 完整结束，DTEM hard eval 达到实际 392 patches；
 - E2 五方法 accuracy gate、token gate、独占 GPU timing 和 memory 全部完成；
 - E3 四行均使用同一 MergeNet checkpoint，单因素定义通过 integrity checks；
-- E6 trace-off/on 等价，1,000 图 manifest 和全部聚合产物完整；
+- E6 trace-off/on 等价，1,000 图 manifest、正文/附录两张真实结果图和按 `DATA_HANDOFF.md` 逐项标记 L0/L1/L2 状态的脱敏 `share_packet/` 完整；
 - 所有结果都能从原始输出自动重建；
 - 所有 checkpoint/source/environment/data identities 有 receipt；
 - 失败、重跑和协议偏差均在 manifest 中保留，不覆盖；
