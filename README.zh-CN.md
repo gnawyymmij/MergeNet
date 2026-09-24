@@ -75,7 +75,8 @@ GPUS=0,1,2,3,4,5,6,7 \
 bash scripts/train_imagenet_300e.sh
 ```
 
-启动脚本会通过梯度累积保持 effective global batch 为 1,024。也可以通过环境
+默认使用 8 卡、每卡 batch 128，有效全局 batch 为 1,024，与论文主实验的批量配置一致。
+启动脚本会根据 GPU 数量计算梯度累积步数。也可以通过环境
 变量设置 `BATCH_SIZE`、`GLOBAL_BATCH`、`RUN_NAME` 和 `RESUME`。完整配置位于
 [`configs/mergenet_l2_spatial_r3.yaml`](configs/mergenet_l2_spatial_r3.yaml)。
 

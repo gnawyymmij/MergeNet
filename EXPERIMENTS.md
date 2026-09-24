@@ -172,11 +172,11 @@ CUDA_VISIBLE_DEVICES="$MN_BENCH_GPU" python tests/test_model_smoke.py
 DATA_DIR="$MN_DATA_DIR" \
 OUTPUT_DIR="$MN_OUTPUT_ROOT/dry_run" \
 GPUS=0,1,2,3,4,5,6,7 \
-NPROC_PER_NODE=8 BATCH_SIZE=64 GLOBAL_BATCH=1024 DRY_RUN=1 \
+NPROC_PER_NODE=8 BATCH_SIZE=128 GLOBAL_BATCH=1024 DRY_RUN=1 \
 bash scripts/train_imagenet_300e.sh
 ```
 
-输出中的 `--update_freq` 必须为 2。若使用每卡 batch 128，则必须为 1。
+输出中的 `--batch_size` 必须为 128，`--update_freq` 必须为 1。
 
 ### 4.4 新实验代码必须提供的 smoke 接口
 

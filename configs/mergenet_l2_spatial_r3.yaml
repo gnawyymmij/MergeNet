@@ -1,7 +1,7 @@
 aa: "rand-m9-mstd0.5-inc1"
 amp: true
 attn_drop_rate: 0.0
-batch_size: 64
+batch_size: 128
 checkpoint_hist: 3
 clip_grad: 1.0
 clip_mode: "norm"

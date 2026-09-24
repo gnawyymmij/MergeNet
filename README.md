@@ -82,8 +82,10 @@ GPUS=0,1,2,3,4,5,6,7 \
 bash scripts/train_imagenet_300e.sh
 ```
 
-The launcher derives gradient accumulation to keep the effective global batch
-at 1,024. `BATCH_SIZE`, `GLOBAL_BATCH`, `RUN_NAME`, and `RESUME` may be supplied
+On eight GPUs, the default uses 128 images per GPU and an effective global
+batch of 1,024, matching the reported batch configuration. The launcher
+derives gradient accumulation from the available GPU count. `BATCH_SIZE`,
+`GLOBAL_BATCH`, `RUN_NAME`, and `RESUME` may be supplied
 as environment variables. The full scientific configuration is in
 [`configs/mergenet_l2_spatial_r3.yaml`](configs/mergenet_l2_spatial_r3.yaml).
 
@@ -100,7 +102,7 @@ torchrun --standalone --nproc-per-node=8 \
   trainer/classification/in1k_trainer.py \
   --config configs/mergenet_l2_spatial_r3.yaml \
   --data_dir /path/to/imagenet \
-  --batch_size 64 --update_freq 2 \
+  --batch_size 128 --update_freq 1 \
   --output ./outputs --experiment mergenet_l2_r3
 ```
 

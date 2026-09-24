@@ -20,7 +20,7 @@ fi
 PYTHON_BIN=${PYTHON_BIN:-python}
 TORCHRUN_BIN=${TORCHRUN_BIN:-torchrun}
 NPROC_PER_NODE=${NPROC_PER_NODE:-$(${PYTHON_BIN} -c 'import torch; print(torch.cuda.device_count())')}
-BATCH_SIZE=${BATCH_SIZE:-64}
+BATCH_SIZE=${BATCH_SIZE:-128}
 GLOBAL_BATCH=${GLOBAL_BATCH:-1024}
 OUTPUT_DIR=${OUTPUT_DIR:-./outputs}
 RUN_NAME=${RUN_NAME:-mergenet_l2_r3}

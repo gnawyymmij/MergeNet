@@ -521,13 +521,27 @@ class LocalEncoder(nn.Module):
         x = self.vit.norm_pre(x)
 
         n = x.shape[1]
+        # Center/none tracing never uses the source matrix to aggregate a
+        # previous layer's features. In inference, retain each narrow metric
+        # instead of all full-width block outputs until the merge loop.
+        precompute_metrics = (
+            not self.training
+            and not torch.is_grad_enabled()
+            and self._tome_info.get("source_trace_mode", "center") in ("center", "none")
+        )
         x_layers = []
-        for local_blk in self.vit.blocks:
+        metrics = []
+        for i, local_blk in enumerate(self.vit.blocks):
             x = local_blk(x)
-            x_layers.append(x)
-        if not x_layers:
+            if precompute_metrics:
+                # The scale only changes gradients: s*x + (1-s)*detach(x)
+                # is the identity in a no-grad inference forward.
+                metrics.append(self.metric_layers[i](x))
+            else:
+                x_layers.append(x)
+        if not self.vit.blocks:
             raise RuntimeError("LocalEncoder requires at least one local block.")
-        x_embed = x_layers[-1]
+        x_embed = x
         x_merge = x_embed
         r_list = parse_r(
             self.local_depth,
@@ -557,12 +571,15 @@ class LocalEncoder(nn.Module):
         size = self._tome_info["size"]
         source_matrix = None
 
-        for i, layer_x in enumerate(x_layers):
+        for i in range(len(self.vit.blocks)):
             self._tome_info["merge_layer_index"] = i
-            x_metric = self._aggregate_with_source_matrix(layer_x, size, source_matrix)
-            s = self.metric_grad_scale
-            metric_input = x_metric * s + x_metric.detach() * (1 - s)
-            metric = self.metric_layers[i](metric_input)
+            if precompute_metrics:
+                metric = metrics[i]
+            else:
+                x_metric = self._aggregate_with_source_matrix(x_layers[i], size, source_matrix)
+                s = self.metric_grad_scale
+                metric_input = x_metric * s + x_metric.detach() * (1 - s)
+                metric = self.metric_layers[i](metric_input)
             r = r_list[i] if i < len(r_list) else 0
 
             x_merge, size, n, _, source_matrix = self.merge_block._merge_train(
@@ -1144,7 +1161,7 @@ class CLSHybridToMeModel(HybridToMeModel):
             k = token_strength_no_cls.shape[1]
 
         soft_sel = None
-        if self.soft_topk and self.total_merge_local > 0:
+        if self.training and self.soft_topk and self.total_merge_local > 0:
             soft_sel = ThreTopK(token_strength_no_cls, k, temperature=30.0)
 
         with torch.no_grad():

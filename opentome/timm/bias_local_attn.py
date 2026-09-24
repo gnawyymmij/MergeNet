@@ -685,8 +685,12 @@ class LocalAttention(nn.Module):
             (B, N, C)
         """
         B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)  # (B, H, N, D)
+        # FlashAttention consumes BNHD. Use it for inference to avoid three
+        # layout copies per block; preserve the original training layout.
+        fast_inference = not self.training and not torch.is_grad_enabled()
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 1, 3, 4) if fast_inference else qkv.permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
         # 使用 unbiased local attention
         # q = q * self.scale
@@ -695,22 +699,26 @@ class LocalAttention(nn.Module):
             local_window=self.local_window,
             dropout_p=self.attn_drop.p,
             training=self.training,
-        )  # (B, H, N, D)
+        )  # BNHD for inference, BHND for training
 
         if self.cls_global and self.local_window >= 0 and N > 1:
+            q_cls, k_all, v_all = (
+                (q[:, :1].transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2))
+                if fast_inference else (q[:, :, :1, :], k, v)
+            )
             cls_x = F.scaled_dot_product_attention(
-                q[:, :, :1, :],
-                k,
-                v,
+                q_cls, k_all, v_all,
                 attn_mask=None,
                 dropout_p=self.attn_drop.p if self.training else 0.0,
                 is_causal=False,
             )
             x = x.clone()
-            x[:, :, :1, :] = cls_x
+            if fast_inference:
+                x[:, :1] = cls_x.transpose(1, 2)
+            else:
+                x[:, :, :1, :] = cls_x
         
-        # (B, H, N, D) -> (B, N, H, D) -> (B, N, C)
-        x = x.transpose(1, 2).reshape(B, N, C)
+        x = x.reshape(B, N, C) if fast_inference else x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x

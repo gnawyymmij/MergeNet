@@ -974,10 +974,77 @@ class _SparseTransport(torch.autograd.Function):
         return grad_assignment, grad_values, None, None, None
 
 
+def _use_dense_inference_transport(
+    assignment, values, receiver_indices, receiver_valid, num_receivers
+):
+    batch, donors, _ = assignment.shape
+    dense_bytes = batch * donors * int(num_receivers) * assignment.element_size()
+    return (
+        not torch.is_grad_enabled()
+        and assignment.is_cuda
+        and assignment.dtype == values.dtype
+        and assignment.dtype in (torch.float16, torch.float32)
+        and batch >= 32
+        and receiver_indices.shape == assignment.shape
+        and receiver_valid.shape == assignment.shape
+        and dense_bytes <= 64 * 2**20
+    )
+
+
+def _dense_inference_assignment(
+    assignment, receiver_indices, receiver_valid, num_receivers
+):
+    batch, donors, _ = assignment.shape
+    dense = assignment.new_zeros(batch, donors, int(num_receivers))
+    dense.scatter_add_(
+        2, receiver_indices.clamp(0, int(num_receivers) - 1),
+        assignment * receiver_valid.to(assignment.dtype),
+    )
+    return dense.transpose(1, 2)
+
+
+def sparse_weighted_transport_pair(
+    assignment, weighted_features, donor_mass,
+    receiver_indices, receiver_valid, num_receivers,
+):
+    """Transport features and mass with one shared inference assignment."""
+    if (
+        _use_dense_inference_transport(
+            assignment, weighted_features, receiver_indices,
+            receiver_valid, num_receivers,
+        )
+        and donor_mass.dtype == assignment.dtype
+    ):
+        dense_t = _dense_inference_assignment(
+            assignment, receiver_indices, receiver_valid, num_receivers
+        )
+        features = torch.bmm(dense_t, weighted_features)
+        mass = torch.bmm(dense_t, donor_mass.unsqueeze(-1)).squeeze(-1)
+        return features, mass
+    features = sparse_weighted_transport(
+        assignment, weighted_features, receiver_indices,
+        receiver_valid, num_receivers,
+    )
+    mass = sparse_weighted_transport(
+        assignment, donor_mass.unsqueeze(-1), receiver_indices,
+        receiver_valid, num_receivers,
+    ).squeeze(-1)
+    return features, mass
+
+
 def sparse_weighted_transport(
     assignment, values, receiver_indices, receiver_valid, num_receivers
 ):
-    """Scatter weighted donor values without materializing [B, Na, K, C]."""
+    """Transport weighted donor values, avoiding the [B, Na, K, C] tensor."""
+    # Large inference batches use GEMM instead of contended atomics. Training,
+    # small batches, and large grids keep the sparse/autograd implementation.
+    if _use_dense_inference_transport(
+        assignment, values, receiver_indices, receiver_valid, num_receivers
+    ):
+        dense_t = _dense_inference_assignment(
+            assignment, receiver_indices, receiver_valid, num_receivers
+        )
+        return torch.bmm(dense_t, values)
     if (
         not torch.is_grad_enabled()
         and _can_use_triton_sparse_transport(
@@ -1848,7 +1915,7 @@ class DTEMBlock(Block):
             # The flat-index window needs its legacy second physical-distance
             # check. Spatial neighborhoods were constructed directly from the
             # exact 2-D adjacency, so their validity mask is already final.
-            physical_mask = valid_mask.clone()  # Start with valid_mask
+            physical_mask = valid_mask if assign_layout == "spatial_sparse" else valid_mask.clone()
             if (
                 assign_layout == "flat_window"
                 and a_orig_idx is not None
@@ -1894,8 +1961,10 @@ class DTEMBlock(Block):
                     # Combine with valid_mask
                     physical_mask = valid_mask & physical_local_mask  # (B, Na, 2*w+1)
 
-            # Apply physical mask to assign (use same dtype as assign)
-            assign = assign * physical_mask.to(assign.dtype)
+            # Spatial _select already zeros invalid candidates. The flat
+            # window path still needs its second physical-distance mask.
+            if assign_layout != "spatial_sparse":
+                assign = assign * physical_mask.to(assign.dtype)
 
             # Clamp indices for scatter operation
             b_indices_clamped = b_indices.clamp(0, Nb_cur - 1)  # (1, Na, 2*window_size+1)
@@ -1906,20 +1975,10 @@ class DTEMBlock(Block):
                 # Fused indexed scatter: never materialize the prohibitive
                 # [B, Na, K, C_embed] contribution tensor (about 0.55 GiB for
                 # one fp16 MN-L2 layer at B=64, 224/p8, R3).
-                xb_contrib = sparse_weighted_transport(
-                    assign,
-                    weighted_xa,
-                    b_indices_clamped,
-                    valid_mask,
-                    Nb_cur,
+                xb_contrib, wb_contrib = sparse_weighted_transport_pair(
+                    assign, weighted_xa, wa, b_indices_clamped,
+                    valid_mask, Nb_cur,
                 )
-                wb_contrib = sparse_weighted_transport(
-                    assign,
-                    wa.unsqueeze(-1),
-                    b_indices_clamped,
-                    valid_mask,
-                    Nb_cur,
-                ).squeeze(-1)
                 xb = wb[..., None] * xb + xb_contrib
                 wb = wb + wb_contrib
             else:
@@ -2134,6 +2193,34 @@ class DTEMBlock(Block):
             else:
                 even_tokens, odd_tokens = xb, xa
                 even_weights, odd_weights = wb, wa
+            if not self.training and not torch.is_grad_enabled() and n == T:
+                # Write the already sorted parity groups directly into the
+                # final sequence, avoiding an intermediate stack and concat.
+                x_output = torch.empty_like(x)
+                size_output = torch.empty_like(size)
+                if offset:
+                    x_output[:, :offset] = x[:, :offset]
+                    size_output[:, :offset] = size[:, :offset]
+                x_output[:, offset:n:2] = even_tokens
+                x_output[:, offset + 1:n:2] = odd_tokens
+                size_output[:, offset:n:2, 0] = even_weights
+                size_output[:, offset + 1:n:2, 0] = odd_weights
+                if source_trace_mode == "center":
+                    if donor_patch_parity == 0:
+                        even_centers, odd_centers = center_a_new, center_b_new
+                    else:
+                        even_centers, odd_centers = center_b_new, center_a_new
+                    old_center = self._tome_info.get("token_center")
+                    center_output = torch.empty(B, T, device=device, dtype=torch.float32)
+                    if offset:
+                        if old_center is None:
+                            center_output[:, :offset] = 0
+                        else:
+                            center_output[:, :offset] = old_center[:, :offset]
+                    center_output[:, offset:n:2] = even_centers
+                    center_output[:, offset + 1:n:2] = odd_centers
+                    self._tome_info["token_center"] = center_output
+                return x_output, size_output, n, _out, source_matrix
             nx = torch.stack((even_tokens, odd_tokens), dim=2).reshape(
                 B, n_tokens, C
             )

@@ -20,6 +20,7 @@ from opentome.timm.dtem import (
     gather_patch_spatial_neighbors,
     sparse_neighbor_dot,
     sparse_weighted_transport,
+    sparse_weighted_transport_pair,
 )
 
 
@@ -213,6 +214,9 @@ def select_parity_case(device, use_softkmax=True):
     b_sparse = b_dense.detach().clone().requires_grad_()
     dense_assignment, _ = dense._select(3, a_dense, b_dense, a_idx, b_idx)
     sparse_assignment, _ = sparse._select(3, a_sparse, b_sparse, a_idx, b_idx)
+    assert not bool(sparse_assignment.masked_select(
+        ~sparse._tome_info["assign_valid_mask"]
+    ).count_nonzero())
     sparse_dense = densify_sparse_assignment(
         sparse_assignment,
         sparse._tome_info["assign_b_indices"],
@@ -459,6 +463,41 @@ def test_cuda_forward_backward_if_available():
     test_local_encoder_cuda_checkpoint_forward_backward_if_available()
 
 
+def test_large_batch_inference_transport_if_available():
+    if not torch.cuda.is_available():
+        return
+    torch.manual_seed(20260924)
+    batch, donors, receivers, neighbors = 32, 11, 13, 7
+    indices = torch.randint(receivers, (batch, donors, neighbors), device="cuda")
+    valid = torch.rand(batch, donors, neighbors, device="cuda") > 0.2
+    for dtype in (torch.float16, torch.float32):
+        for channels in (1, 32):
+            assignment = torch.rand(batch, donors, neighbors, device="cuda", dtype=dtype)
+            values = torch.randn(batch, donors, channels, device="cuda", dtype=dtype)
+            mass = torch.rand(batch, donors, device="cuda", dtype=dtype)
+            with torch.no_grad():
+                actual = sparse_weighted_transport(assignment, values, indices, valid, receivers)
+                pair_features, pair_mass = sparse_weighted_transport_pair(
+                    assignment, values, mass, indices, valid, receivers
+                )
+                expected = torch.zeros(batch, receivers, channels, device="cuda", dtype=dtype)
+                expected.scatter_add_(
+                    1,
+                    indices.flatten(1).unsqueeze(-1).expand(-1, -1, channels),
+                    (assignment.unsqueeze(-1) * values.unsqueeze(2)
+                     * valid.unsqueeze(-1)).flatten(1, 2),
+                )
+                expected_mass = torch.zeros(batch, receivers, device="cuda", dtype=dtype)
+                expected_mass.scatter_add_(
+                    1, indices.flatten(1),
+                    (assignment * mass.unsqueeze(-1) * valid).flatten(1),
+                )
+            atol = 2e-2 if dtype == torch.float16 else 1e-4
+            assert torch.allclose(actual, expected, atol=atol, rtol=atol)
+            assert torch.allclose(pair_features, expected, atol=atol, rtol=atol)
+            assert torch.allclose(pair_mass, expected_mass, atol=atol, rtol=atol)
+
+
 def main():
     test_rectangular_neighbor_table_and_boundaries()
     test_partition_mapping_matches_dense_mask_for_batches()
@@ -470,6 +509,7 @@ def main():
     test_merge_transport_dense_sparse_cpu_parity()
     test_checkpoint_state_is_backend_independent()
     test_cuda_forward_backward_if_available()
+    test_large_batch_inference_transport_if_available()
     print("DTEM_SPATIAL_SPARSE_TEST_PASS")
 
 
