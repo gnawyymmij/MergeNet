@@ -35,3 +35,16 @@ venv/
 .vscode/
 *.swp
 .DS_Store
+
+# Internal experiment planning and collaborator packets
+/EXPERIMENTS.md
+/experiments.md
+/DATA_HANDOFF.md
+/experiments/
+/share_packet*/
+/paper_code_audit*.html
+/docs/render_visualization_preview.py
+/docs/visualization_preview.png
+/scripts/validate_handoff.py
+/scripts/render_handoff_figures.py
+/tests/test_handoff_*.py

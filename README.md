@@ -1,5 +1,7 @@
 # MergeNet
 
+[中文说明](README.zh-CN.md)
+
 MergeNet is a vision transformer with differentiable spatial routing and a
 physical token bottleneck. It preserves the original two-dimensional patch
 geometry while learning local token transport, gathers an exact number of
@@ -89,11 +91,8 @@ derives gradient accumulation from the available GPU count. `BATCH_SIZE`,
 as environment variables. The full scientific configuration is in
 [`configs/mergenet_l2_spatial_r3.yaml`](configs/mergenet_l2_spatial_r3.yaml).
 
-The remaining paper experiments (matched DTEM, common accuracy/latency/memory,
-component interventions, and routing traces) are specified in
-[`EXPERIMENTS.md`](EXPERIMENTS.md). The privacy-aware result return schema is in
-[`DATA_HANDOFF.md`](DATA_HANDOFF.md). To validate launcher arguments without
-starting training, add `DRY_RUN=1` to the command above.
+To validate launcher arguments without starting training, add `DRY_RUN=1`
+to the command above.
 
 For direct control, invoke the trainer with `torchrun`:
 
@@ -105,6 +104,35 @@ torchrun --standalone --nproc-per-node=8 \
   --batch_size 128 --update_freq 1 \
   --output ./outputs --experiment mergenet_l2_r3
 ```
+
+## Inference
+
+Create the default 224-pixel model with timm. This example uses random weights;
+trained checkpoints must be loaded separately.
+
+```python
+import torch
+from timm import create_model
+import opentome.models.mergenet.model  # Registers the model with timm.
+
+model = create_model("mergenet_small_cls", pretrained=False).cuda().eval()
+images = torch.randn(1, 3, 224, 224, device="cuda")
+with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+    logits, metadata = model(images)
+print(logits.shape)  # [1, 1000]
+print(metadata["retained_tokens"])  # 392 patch carriers
+```
+
+For repeated inputs of a fixed shape, enable optional compilation after
+loading weights and calling `eval()`:
+
+```python
+from opentome.models.mergenet.inference import compile_transformer_blocks
+model = compile_transformer_blocks(model)
+```
+
+Compilation occurs on the first forward pass. Exclude compilation and warmup
+from steady-state timing.
 
 ## License
 

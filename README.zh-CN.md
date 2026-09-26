@@ -1,5 +1,7 @@
 # MergeNet
 
+[English](README.md)
+
 MergeNet 是一个带可微空间路由和真实 token 瓶颈的视觉 Transformer。模型在
 原始二维 patch 网格上学习局部 token 传输，精确收集固定数量的 carrier tokens，
 再由 latent Transformer 处理压缩后的序列。
@@ -80,11 +82,36 @@ bash scripts/train_imagenet_300e.sh
 变量设置 `BATCH_SIZE`、`GLOBAL_BATCH`、`RUN_NAME` 和 `RESUME`。完整配置位于
 [`configs/mergenet_l2_spatial_r3.yaml`](configs/mergenet_l2_spatial_r3.yaml)。
 
-论文仍需补充的 DTEM、统一效率评测、组件消融和路由可视化实验见
-[`EXPERIMENTS.md`](EXPERIMENTS.md)。如只想检查启动参数而不开始训练，可在上述
-命令前增加 `DRY_RUN=1`。
+如只想检查启动参数而不开始训练，可在上述命令前增加 `DRY_RUN=1`。
 
 本仓库不提供预训练 checkpoint；checkpoint 会在训练过程中由 trainer 正常生成。
+
+## 推理
+
+使用 timm 创建默认的 224-pixel 模型。下例使用随机权重；训练后的 checkpoint
+需要另行加载。
+
+```python
+import torch
+from timm import create_model
+import opentome.models.mergenet.model  # 注册模型。
+
+model = create_model("mergenet_small_cls", pretrained=False).cuda().eval()
+images = torch.randn(1, 3, 224, 224, device="cuda")
+with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+    logits, metadata = model(images)
+print(logits.shape)  # [1, 1000]
+print(metadata["retained_tokens"])  # 392 个 patch carriers
+```
+
+对于固定输入形状的重复推理，在加载权重并调用 `eval()` 后，可启用编译优化：
+
+```python
+from opentome.models.mergenet.inference import compile_transformer_blocks
+model = compile_transformer_blocks(model)
+```
+
+首次 forward 会触发编译；测量稳定推理延迟时应排除编译和预热。
 
 ## License
 

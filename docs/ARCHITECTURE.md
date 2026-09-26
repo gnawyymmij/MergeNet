@@ -67,12 +67,11 @@ Invalid candidates have zero assignment mass. Rows with no eligible receiver
 remain finite and unmerged; they never fall back to an out-of-radius token. If
 the legal graph cannot satisfy the fixed merge target, execution fails closed.
 
-## What is and is not two-dimensional
+## Routing and local attention
 
-DTEM merge routing uses real `(row, col)` coordinates. `LocalBlock` attention
-still uses its independent `local_block_window=16` sequence-local kernel. The
-completed ablation changes only routing geometry. Converting LocalBlock
-attention to a 2-D kernel would be a different model and requires new training.
+Merge routing uses real `(row, col)` coordinates. `LocalBlock` attention
+uses a separate sequence-local kernel with `local_block_window=16`. These
+settings independently control routing eligibility and local attention.
 
 ## Evaluation modes
 
